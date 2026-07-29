@@ -1,5 +1,7 @@
 name: Build & Publish Debug APK
 
+# 推送到 GitHub 后自动编译出 app-debug.apk（无需本机装 Android Studio / SDK）
+# 方法对齐 islaany/BookPageMapAssistant：ubuntu 运行机已预装完整 Android SDK + JDK，自带 android-34
 on:
   push:
     branches: [ main, master ]
@@ -20,20 +22,10 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK packages (compileSdk 34 + build-tools)
-        run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
-
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
 
       - name: Build debug APK
         id: build
@@ -56,11 +48,11 @@ jobs:
               body: '```\n' + tail + '\n```'
             });
 
-      - name: Publish APK to Release (debug-apk tag)
+      - name: Publish APK to Release
         if: steps.build.outcome == 'success'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: debug-apk
           name: Debug APK (latest)
           prerelease: true
-          files: app/build/outputs/apk/debug/*.apk
+          files: app/build/outputs/apk/debug/app-debug.apk
