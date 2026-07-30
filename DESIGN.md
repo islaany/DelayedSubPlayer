@@ -16,7 +16,7 @@
 | 能力 | 方案 | 备注 |
 |---|---|---|
 | 视频播放 | **AndroidX Media3 ExoPlayer** (`media3-exoplayer`) | 支持 mp4 / mkv / HEVC 硬解 |
-| Compose 视频表面 | `media3-ui-compose` (`PlayerSurface`) | |
+| Compose 视频表面 | `media3-ui` 的 `PlayerView`（`AndroidView` 嵌入，关闭自带控制条） | `ui-compose` 在 1.4.1 不存在（自 1.6.0 才有），故用 View 版 PlayerView |
 | SRT 解析 | **Media3 自带 `SubripParser`** (`media3-extractor`) | 成熟方案；ASS 二期换 `SsaParser`，零架构改动 |
 | 最近播放 | Room (`media3` 无关，标准 Jetpack) | |
 | 设置持久化 | DataStore Preferences | 延迟上限 / 学习模式 |

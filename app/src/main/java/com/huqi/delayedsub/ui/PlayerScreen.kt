@@ -39,10 +39,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.Player
-import androidx.media3.ui.compose.PlayerSurface
-import androidx.media3.ui.compose.SurfaceType
+import androidx.media3.ui.PlayerView
 import androidx.navigation.NavController
 import com.huqi.delayedsub.DelayedSubApplication
 import com.huqi.delayedsub.learning.DelayEngine
@@ -93,9 +93,14 @@ fun PlayerScreen(videoId: Long, navController: NavController) {
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            PlayerSurface(
-                player = player,
-                surfaceType = SurfaceType.SurfaceView,
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        useController = false
+                        setPlayer(player)
+                    }
+                },
+                onRelease = { it.player = null },
                 modifier = Modifier.fillMaxSize()
             )
             SubtitleOverlay(display)

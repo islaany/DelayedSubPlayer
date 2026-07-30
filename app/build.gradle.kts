@@ -61,10 +61,9 @@ dependencies {
     implementation(libs.compose.icons.extended)
     debugImplementation(libs.compose.ui.tooling)
 
-    // Media3 (ExoPlayer + subtitle parsers + Compose surface)
+    // Media3 (ExoPlayer + subtitle parsers + View-based PlayerView)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
-    implementation(libs.media3.ui.compose)
     implementation(libs.media3.extractor)
 
     // Persistence
