@@ -45,7 +45,17 @@ jobs:
 
       - name: Build debug APK
         id: build
-        run: ./gradlew assembleDebug --no-daemon 2>&1 | tee build.log
+        run: |
+          set -euo pipefail
+          ./gradlew :app:assembleDebug --no-daemon 2>&1 | tee build.log
+
+      - name: Verify APK exists
+        id: verify
+        run: |
+          set -euo pipefail
+          FILE=$(find app/build/outputs/apk/debug -name 'app-debug.apk' | head -1)
+          echo "APK=$FILE size=$(stat -c%s "$FILE")"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
 
       - name: Publish APK to Release
         id: publish
@@ -53,16 +63,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          FILE=$(find app/build/outputs/apk/debug -name 'app-debug.apk' | head -1)
-          echo "FILE=$FILE"
-          if [ -z "$FILE" ]; then echo "APK_NOT_FOUND"; ls -laR app/build/outputs; exit 1; fi
+          set -euo pipefail
+          FILE="${{ steps.verify.outputs.file }}"
+          echo "Publishing $FILE"
           gh release delete debug-apk -y --cleanup-tag 2>/dev/null || true
           gh release create debug-apk "$FILE" \
             --title "Debug APK (latest)" \
             --prerelease \
             --notes "Auto-built debug APK from ${{ github.sha }}"
-          echo "PUBLISHED $FILE"
 
       - name: Diagnose on failure
         if: failure()
@@ -70,11 +78,11 @@ jobs:
         with:
           script: |
             const { execSync } = require('child_process');
-            const tail = (p) => { try { return execSync('tail -n 150 ' + p + ' 2>/dev/null || echo MISSING').toString(); } catch (e) { return String(e); } };
-            const tree = (p) => { try { return execSync('ls -laR ' + p + ' 2>&1 || true').toString(); } catch (e) { return String(e); } };
+            const head = (p,n) => { try { return execSync('head -n ' + n + ' ' + p + ' 2>/dev/null || echo MISSING').toString(); } catch (e) { return String(e); } };
+            const tail = (p,n) => { try { return execSync('tail -n ' + n + ' ' + p + ' 2>/dev/null || echo MISSING').toString(); } catch (e) { return String(e); } };
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: 'CI diag #' + context.runNumber + ' build failed',
-              body: 'BUILD_TAIL:\n```\n' + tail('build.log') + '\n```\nAPK_TREE:\n```\n' + tree('app/build/outputs/apk') + '\n```'
+              body: 'BUILD_HEAD:\n```\n' + head('build.log', 200) + '\n```\nBUILD_TAIL:\n```\n' + tail('build.log', 120) + '\n```'
             });
