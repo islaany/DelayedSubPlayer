@@ -48,11 +48,21 @@ jobs:
               body: '```\n' + tail + '\n```'
             });
 
+      - name: List build output
+        if: steps.build.outcome == 'success'
+        run: ls -la app/build/outputs/apk/debug/ || echo "debug dir missing"
+
       - name: Publish APK to Release
         if: steps.build.outcome == 'success'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: debug-apk
-          name: Debug APK (latest)
-          prerelease: true
-          files: app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILE=$(find app/build/outputs/apk/debug -name 'app-debug.apk' | head -1)
+          if [ -z "$FILE" ]; then echo "APK not found"; exit 1; fi
+          echo "Publishing $FILE ($(stat -c%s "$FILE") bytes)"
+          gh release delete debug-apk -y || true
+          git push origin :refs/tags/debug-apk || true
+          gh release create debug-apk "$FILE" \
+            --title "Debug APK (latest)" \
+            --prerelease \
+            --notes "Auto-built debug APK from ${{ github.sha }}"
