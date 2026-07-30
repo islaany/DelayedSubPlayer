@@ -1,74 +1,72 @@
 package com.huqi.delayedsub.subtitle.parser
 
-import androidx.media3.extractor.text.SubtitleParser
-import androidx.media3.extractor.text.subrip.SubripParser
 import com.huqi.delayedsub.subtitle.model.SubtitleItem
-import java.nio.ByteBuffer
 
 /**
- * SRT 字幕解析器。
+ * SRT 字幕解析器（自包含实现）。
  *
- * 复用 AndroidX Media3 内置的 [SubripParser]（ExoPlayer 官方解析器，成熟稳定），
- * 不自己造轮子。解析后通过字幕事件时间轴重建每条 cue 的 [start, end] 区间，
- * 再用 [BilingualCueSplitter] 把文本拆成英文 / 中文两部分。
+ * 不依赖 AndroidX Media3 内部的 [androidx.media3.extractor.text.subrip.SubripParser]，
+ * 因为其 `parse(...)` 签名在 1.4.x 之后有破坏性变更，且 `OutputOptions` /
+ * `DecodeTricks` 属于非公开 API（在 1.4.1 中已不可访问）。这里直接按 SRT 规范解析，
+ * 行为稳定、与 Media3 版本无关。解析后用 [BilingualCueSplitter] 拆出英文 / 中文。
  *
- * 第二阶段支持 .ass / .ssa 时，只需把这里的 [SubripParser] 换成 Media3 的
- * [androidx.media3.extractor.text.ssa.SsaParser]，上层结构无需改动。
+ * 兼容点：
+ * - UTF-8（自动剥离 BOM）
+ * - 时间码分隔符 `,` 与 `.` 都接受（部分工具导出用 `.`）
+ * - 空行切片，且兼容 `\r\n` / `\n`
  */
 object SrtSubtitleParser {
 
+    private val TIMECODE = Regex(
+        """(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})"""
+    )
+
     fun parse(bytes: ByteArray): List<SubtitleItem> {
-        val parser = SubripParser()
-        val subtitle = parser.parse(
-            ByteBuffer.wrap(bytes),
-            SubtitleParser.OutputOptions.ALL,
-            SubtitleParser.DecodeTricks.DEFAULT
-        )
+        val raw = String(bytes, Charsets.UTF_8).replace("\uFEFF", "")
+        return parse(raw)
+    }
 
-        val count = subtitle.eventTimeCount
+    fun parse(text: String): List<SubtitleItem> {
         val items = mutableListOf<SubtitleItem>()
-        // 以 cue 文本为 key，记录当前仍"活跃"的 cue 的起始时间
-        val activeStart = LinkedHashMap<String, Long>()
-        var lastTime = 0L
-
-        for (i in 0 until count) {
-            val t = subtitle.getEventTime(i)
-            lastTime = t
-
-            val present = mutableSetOf<String>()
-            for (cue in subtitle.getCues(t)) {
-                val key = cue.text?.toString() ?: continue
-                present += key
-            }
-
-            // 结束的 cue：用 (start, 当前事件时间) 收尾
-            for ((key, start) in activeStart.toList()) {
-                if (key !in present) {
-                    items += build(key, start, t)
-                    activeStart.remove(key)
+        // 以空行切块
+        val blocks = text.split(Regex("""\r?\n\r?\n"""))
+        for (block in blocks) {
+            val lines = block.split("\n").map { it.trimEnd('\r') }
+            // 找到时间码行
+            var tcLine = -1
+            for (i in lines.indices) {
+                if (TIMECODE.containsMatchIn(lines[i])) {
+                    tcLine = i
+                    break
                 }
             }
-            // 新开始的 cue
-            for (key in present) {
-                if (key !in activeStart) activeStart[key] = t
-            }
-        }
+            if (tcLine < 0) continue
 
-        // 收尾仍活跃的 cue
-        for ((key, start) in activeStart) {
-            items += build(key, start, lastTime)
-        }
+            val m = TIMECODE.find(lines[tcLine]) ?: continue
+            val (sh, sm, ss, sms, eh, em, es, ems) = m.destructured
+            val start = toMs(sh, sm, ss, sms)
+            val end = toMs(eh, em, es, ems)
 
+            val body = lines.drop(tcLine + 1).joinToString("\n").trim()
+            if (body.isEmpty()) continue
+
+            val (english, chinese) = BilingualCueSplitter.split(body)
+            items += SubtitleItem(
+                startTime = start,
+                endTime = end,
+                englishText = english,
+                chineseText = chinese
+            )
+        }
         return items.sortedBy { it.startTime }
     }
 
-    private fun build(rawText: String, start: Long, end: Long): SubtitleItem {
-        val (english, chinese) = BilingualCueSplitter.split(rawText)
-        return SubtitleItem(
-            startTime = start,
-            endTime = end,
-            englishText = english,
-            chineseText = chinese
-        )
+    private fun toMs(h: String, m: String, s: String, ms: String): Long {
+        val hh = h.toLongOrNull() ?: 0L
+        val mm = m.toLongOrNull() ?: 0L
+        val ss = s.toLongOrNull() ?: 0L
+        // 补足到 3 位毫秒（"1" -> 100，"50" -> 500，"000" -> 000）
+        val milli = (ms + "000").take(3).toLongOrNull() ?: 0L
+        return (hh * 3600 + mm * 60 + ss) * 1000 + milli
     }
 }
