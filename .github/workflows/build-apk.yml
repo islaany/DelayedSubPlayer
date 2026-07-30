@@ -1,6 +1,6 @@
 name: Build & Publish Debug APK
 
-# 推送到 GitHub 后自动编译出 app-debug.apk（无需本机装 Android Studio / SDK）
+# 推送到 GitHub 后自动编译出 app-debug.apk 并发布到 Release（tag: debug-apk）
 # 方法对齐 islaany/BookPageMapAssistant：ubuntu 运行机已预装完整 Android SDK + JDK，自带 android-34
 on:
   push:
@@ -32,55 +32,37 @@ jobs:
         continue-on-error: true
         run: ./gradlew assembleDebug --no-daemon 2>&1 | tee build.log
 
-      - name: Report build failure to issue
-        if: steps.build.outcome == 'failure'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            let log = '';
-            try { log = fs.readFileSync('build.log', 'utf8'); } catch (e) { log = 'build.log not found'; }
-            const tail = log.split('\n').slice(-200).join('\n');
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: 'CI build failed #' + context.runNumber,
-              body: '```\n' + tail + '\n```'
-            });
-
-      - name: List build output
-        if: steps.build.outcome == 'success'
-        run: ls -la app/build/outputs/apk/debug/ || echo "debug dir missing"
-
       - name: Publish APK to Release
         id: publish
         if: steps.build.outcome == 'success'
+        continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -x
           FILE=$(find app/build/outputs/apk/debug -name 'app-debug.apk' | head -1)
-          if [ -z "$FILE" ]; then echo "APK not found"; ls -laR app/build/outputs 2>/dev/null; exit 1; fi
-          echo "Publishing $FILE ($(stat -c%s "$FILE") bytes)"
-          # 干净重建：删旧 release + 旧 tag，避免 tag 已存在导致 create 冲突
-          gh release delete debug-apk -y 2>/dev/null || true
-          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/debug-apk" 2>/dev/null || true
-          git tag -d debug-apk 2>/dev/null || true
+          echo "FILE=$FILE"
+          if [ -z "$FILE" ]; then echo "APK_NOT_FOUND"; ls -laR app/build/outputs; exit 1; fi
+          gh release delete debug-apk -y --cleanup-tag 2>&1 || true
           gh release create debug-apk "$FILE" \
             --title "Debug APK (latest)" \
             --prerelease \
-            --notes "Auto-built debug APK from ${{ github.sha }}"
+            --notes "Auto-built debug APK from ${{ github.sha }}" 2>&1 | tee publish_result.txt
 
-      - name: Report publish failure to issue
-        if: steps.publish.outcome == 'failure'
+      - name: Diagnose on failure
+        if: always()
         uses: actions/github-script@v7
         with:
           script: |
+            const buildOk = '${{ steps.build.outcome }}' === 'success';
+            const pubOk = '${{ steps.publish.outcome }}' === 'success';
+            if (buildOk && pubOk) { console.log('all green, skip issue'); return; }
             const { execSync } = require('child_process');
-            let out = '';
-            try { out = execSync('ls -laR app/build/outputs 2>&1 || true').toString(); } catch (e) { out = String(e); }
+            const tail = (p) => { try { return execSync('tail -n 120 ' + p + ' 2>/dev/null || echo MISSING').toString(); } catch (e) { return String(e); } };
+            const tree = (p) => { try { return execSync('ls -laR ' + p + ' 2>&1 || true').toString(); } catch (e) { return String(e); } };
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: 'CI publish failed #' + context.runNumber,
-              body: '```\n' + out + '\n```'
+              title: 'CI diag #' + context.runNumber + ' build=' + buildOk + ' publish=' + pubOk,
+              body: 'BUILD_TAIL:\n```\n' + tail('build.log') + '\n```\nPUBLISH:\n```\n' + tail('publish_result.txt') + '\n```\nAPK_TREE:\n```\n' + tree('app/build/outputs/apk') + '\n```'
             });
