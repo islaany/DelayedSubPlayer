@@ -2,6 +2,9 @@ name: Build & Publish Debug APK
 
 # 推送到 GitHub 后自动编译出 app-debug.apk 并发布到 Release（tag: debug-apk）
 # 方法对齐 islaany/BookPageMapAssistant：ubuntu 运行机已预装完整 Android SDK + JDK，自带 android-34
+#
+# 注意：仓库里提交的 gradle-wrapper.jar 在某些环境下下载为损坏的 HTML，因此本 CI 在构建前
+# 用 gh api（已认证的 api.github.com，不受 raw CDN 匿名限流影响）重新拉取官方 wrapper jar 覆盖。
 on:
   push:
     branches: [ main, master ]
@@ -24,45 +27,54 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Restore valid gradle wrapper jar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api repos/gradle/gradle/contents/gradle/wrapper/gradle-wrapper.jar?ref=v8.9.0 \
+            --jq '.content' | base64 -d > gradle/wrapper/gradle-wrapper.jar
+          echo "jar size: $(stat -c%s gradle/wrapper/gradle-wrapper.jar)"
+          if unzip -l gradle/wrapper/gradle-wrapper.jar 2>/dev/null | grep -q GradleWrapperMain; then
+            echo "wrapper jar OK"
+          else
+            echo "BAD JAR - aborting"; exit 1
+          fi
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
       - name: Build debug APK
         id: build
-        continue-on-error: true
         run: ./gradlew assembleDebug --no-daemon 2>&1 | tee build.log
 
       - name: Publish APK to Release
         id: publish
         if: steps.build.outcome == 'success'
-        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -x
+          set -e
           FILE=$(find app/build/outputs/apk/debug -name 'app-debug.apk' | head -1)
           echo "FILE=$FILE"
           if [ -z "$FILE" ]; then echo "APK_NOT_FOUND"; ls -laR app/build/outputs; exit 1; fi
-          gh release delete debug-apk -y --cleanup-tag 2>&1 || true
+          gh release delete debug-apk -y --cleanup-tag 2>/dev/null || true
           gh release create debug-apk "$FILE" \
             --title "Debug APK (latest)" \
             --prerelease \
-            --notes "Auto-built debug APK from ${{ github.sha }}" 2>&1 | tee publish_result.txt
+            --notes "Auto-built debug APK from ${{ github.sha }}"
+          echo "PUBLISHED $FILE"
 
       - name: Diagnose on failure
-        if: always()
+        if: failure()
         uses: actions/github-script@v7
         with:
           script: |
-            const buildOk = '${{ steps.build.outcome }}' === 'success';
-            const pubOk = '${{ steps.publish.outcome }}' === 'success';
-            if (buildOk && pubOk) { console.log('all green, skip issue'); return; }
             const { execSync } = require('child_process');
-            const tail = (p) => { try { return execSync('tail -n 120 ' + p + ' 2>/dev/null || echo MISSING').toString(); } catch (e) { return String(e); } };
+            const tail = (p) => { try { return execSync('tail -n 150 ' + p + ' 2>/dev/null || echo MISSING').toString(); } catch (e) { return String(e); } };
             const tree = (p) => { try { return execSync('ls -laR ' + p + ' 2>&1 || true').toString(); } catch (e) { return String(e); } };
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: 'CI diag #' + context.runNumber + ' build=' + buildOk + ' publish=' + pubOk,
-              body: 'BUILD_TAIL:\n```\n' + tail('build.log') + '\n```\nPUBLISH:\n```\n' + tail('publish_result.txt') + '\n```\nAPK_TREE:\n```\n' + tree('app/build/outputs/apk') + '\n```'
+              title: 'CI diag #' + context.runNumber + ' build failed',
+              body: 'BUILD_TAIL:\n```\n' + tail('build.log') + '\n```\nAPK_TREE:\n```\n' + tree('app/build/outputs/apk') + '\n```'
             });
