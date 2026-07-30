@@ -53,16 +53,34 @@ jobs:
         run: ls -la app/build/outputs/apk/debug/ || echo "debug dir missing"
 
       - name: Publish APK to Release
+        id: publish
         if: steps.build.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           FILE=$(find app/build/outputs/apk/debug -name 'app-debug.apk' | head -1)
-          if [ -z "$FILE" ]; then echo "APK not found"; exit 1; fi
+          if [ -z "$FILE" ]; then echo "APK not found"; ls -laR app/build/outputs 2>/dev/null; exit 1; fi
           echo "Publishing $FILE ($(stat -c%s "$FILE") bytes)"
-          gh release delete debug-apk -y || true
-          git push origin :refs/tags/debug-apk || true
+          # 干净重建：删旧 release + 旧 tag，避免 tag 已存在导致 create 冲突
+          gh release delete debug-apk -y 2>/dev/null || true
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/debug-apk" 2>/dev/null || true
+          git tag -d debug-apk 2>/dev/null || true
           gh release create debug-apk "$FILE" \
             --title "Debug APK (latest)" \
             --prerelease \
             --notes "Auto-built debug APK from ${{ github.sha }}"
+
+      - name: Report publish failure to issue
+        if: steps.publish.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            let out = '';
+            try { out = execSync('ls -laR app/build/outputs 2>&1 || true').toString(); } catch (e) { out = String(e); }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'CI publish failed #' + context.runNumber,
+              body: '```\n' + out + '\n```'
+            });
