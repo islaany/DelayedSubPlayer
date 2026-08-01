@@ -124,7 +124,14 @@ fun PlayerScreen(videoId: Long, navController: NavController) {
             showSettings = showSettings,
             onToggleSettings = { showSettings = !showSettings },
             onSetLearning = vm::setLearningMode,
-            onSetMaxDelay = vm::setMaxDelay
+            onSetMaxDelay = vm::setMaxDelay,
+            subtitleSource = subtitleSource,
+            embeddedTracks = embeddedTracks,
+            selectedTrack = selectedTrack,
+            hasExternal = hasExternal,
+            onSelectNoSubtitle = vm::selectNoSubtitle,
+            onSelectEmbedded = vm::selectEmbeddedTrack,
+            onSelectExternal = vm::selectExternalSource
         )
     }
 }
@@ -172,7 +179,14 @@ private fun PlayerControls(
     showSettings: Boolean,
     onToggleSettings: () -> Unit,
     onSetLearning: (Boolean) -> Unit,
-    onSetMaxDelay: (Long) -> Unit
+    onSetMaxDelay: (Long) -> Unit,
+    subtitleSource: SubtitleSource,
+    embeddedTracks: List<EmbeddedTrack>,
+    selectedTrack: EmbeddedTrack?,
+    hasExternal: Boolean,
+    onSelectNoSubtitle: () -> Unit,
+    onSelectEmbedded: (EmbeddedTrack) -> Unit,
+    onSelectExternal: () -> Unit
 ) {
     val duration = player.duration.coerceAtLeast(0L)
     Column(Modifier.fillMaxWidth().background(Color(0xFF101010)).padding(8.dp)) {
@@ -200,14 +214,14 @@ private fun PlayerControls(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FilterChip(
                     selected = subtitleSource == SubtitleSource.NONE,
-                    onClick = vm::selectNoSubtitle,
+                    onClick = onSelectNoSubtitle,
                     label = { Text("无") },
                     modifier = Modifier.padding(end = 8.dp)
                 )
                 if (embeddedTracks.isNotEmpty()) {
                     FilterChip(
                         selected = subtitleSource == SubtitleSource.EMBEDDED,
-                        onClick = { vm.selectEmbeddedTrack(embeddedTracks.first()) },
+                        onClick = { onSelectEmbedded(embeddedTracks.first()) },
                         label = { Text("内嵌字幕") },
                         modifier = Modifier.padding(end = 8.dp)
                     )
@@ -215,7 +229,7 @@ private fun PlayerControls(
                 if (hasExternal) {
                     FilterChip(
                         selected = subtitleSource == SubtitleSource.EXTERNAL,
-                        onClick = vm::selectExternalSource,
+                        onClick = onSelectExternal,
                         label = { Text("外部字幕") },
                         modifier = Modifier.padding(end = 8.dp)
                     )
@@ -232,7 +246,7 @@ private fun PlayerControls(
                     embeddedTracks.forEach { t: EmbeddedTrack ->
                         FilterChip(
                             selected = selectedTrack == t,
-                            onClick = { vm.selectEmbeddedTrack(t) },
+                            onClick = { onSelectEmbedded(t) },
                             label = { Text(t.displayName) },
                             modifier = Modifier.padding(end = 8.dp)
                         )
