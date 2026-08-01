@@ -105,9 +105,14 @@ fun PlayerScreen(videoId: Long, navController: NavController) {
                     PlayerView(ctx).apply {
                         useController = false
                         setPlayer(player)
-                        // 内嵌字幕由我们自己的覆盖层渲染，隐藏播放器自带 SubtitleView 避免双重显示
-                        findViewById<SubtitleView>(androidx.media3.ui.R.id.exo_subtitles)?.visibility = View.GONE
+                        // 默认隐藏自带字幕视图：文本轨由我们的覆盖层渲染（中文延迟）
+                        subtitleView?.visibility = View.GONE
                     }
+                },
+                update = { pv ->
+                    // 图片字幕（PGS/SUP）由 ExoPlayer 自带 SubtitleView 直接渲染，其余情况用我们的覆盖层
+                    val showBuiltIn = subtitleSource == SubtitleSource.EMBEDDED && selectedTrack?.isPgs == true
+                    pv.subtitleView?.visibility = if (showBuiltIn) View.VISIBLE else View.GONE
                 },
                 onRelease = { it.player = null },
                 modifier = Modifier.fillMaxSize()

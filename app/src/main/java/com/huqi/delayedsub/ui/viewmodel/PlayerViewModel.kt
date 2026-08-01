@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.TrackSelectionOverride
@@ -39,8 +40,15 @@ import kotlinx.coroutines.launch
  *   [Player.Listener.onCues] 抓取 cue 并实时累积成 [SubtitleItem]，复用相同的渲染 /
  *   延迟逻辑。
  *
- * 关键点：ExoPlayer 内置字幕默认被禁用（见 [Media3Player]），内嵌字幕不交给播放器自带
- * 渲染，而是由本类捕获后走我们自己的覆盖层，这样才能做到"中文比英文晚出现"。
+ * 字幕轨类型适配（"都适配"）：
+ * - 文本轨（SRT / ASS / WebVTT / TTML 等）：cue 携带文本，走我们的覆盖层，中文延迟显示。
+ * - 图片轨（PGS / SUP，蓝光内封常见）：ExoPlayer 自带 PgsParser 解码为带 bitmap 的 cue，
+ *   由播放器自带 SubtitleView 直接渲染（图片无法拆中英，原样显示，无延迟）。
+ * - 关键点：ExoPlayer 内置字幕默认被禁用（见 [Media3Player]），且我们对文本轨隐藏了
+ *   SubtitleView 以防双重渲染；仅当选中的是图片轨时才显示 SubtitleView。
+ *
+ * 注意 onTracksChanged 不可再用 [Tracks.Group.isSupported] 过滤——图片字幕轨的 isSupported
+ * 可能为 false，但 ExoPlayer 的 DefaultSubtitleParserFactory 已注册 PGS，原生支持解码。
  */
 @OptIn(UnstableApi::class)
 class PlayerViewModel(app: Application, private val videoId: Long) : AndroidViewModel(app) {
@@ -78,20 +86,27 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
 
     private val playerListener = object : Player.Listener {
         override fun onTracksChanged(tracks: Tracks) {
+            // 不过滤 isSupported：PGS 图片轨 isSupported 可能为 false，但 ExoPlayer 原生支持解码，
+            // 过滤会直接漏掉它导致图片字幕永远无法选择 / 显示
             val textTracks = tracks.groups
-                .filter { it.type == C.TRACK_TYPE_TEXT && it.isSupported }
+                .filter { it.type == C.TRACK_TYPE_TEXT }
                 .flatMap { g ->
                     (0 until g.length).map { i ->
                         val f = g.getTrackFormat(i)
-                        EmbeddedTrack(g.mediaTrackGroup, i, f.language, f.label)
+                        EmbeddedTrack(
+                            g.mediaTrackGroup,
+                            i,
+                            f.language,
+                            f.label,
+                            isPgs = f.sampleMimeType == MimeTypes.APPLICATION_PGS
+                        )
                     }
                 }
             _embeddedTracks.value = textTracks
             if (!_autoResolved) {
                 _autoResolved = true
                 val hasExternal = !(_video.value?.subtitleUri.isNullOrBlank())
-                // 没有外部字幕且视频自带字幕轨时，自动启用第一条内嵌字幕
-                // 优先选中文轨（贴合"听英文、看中文"的学习目的），否则用第一条
+                // 没有外部字幕且视频自带字幕轨时，自动启用一条内嵌字幕
                 if (!hasExternal && textTracks.isNotEmpty()) {
                     selectEmbeddedTrack(pickDefaultTrack(textTracks))
                 }
@@ -100,13 +115,17 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
 
         /**
          * 内嵌字幕轨解码后逐条吐出当前可见 cue。
-         * 这里把 cue 增量累积成 [SubtitleItem] 列表（复用既有渲染 / 延迟逻辑）。
+         * - 图片字幕（PGS）：由 ExoPlayer 自带 SubtitleView 渲染，这里直接跳过。
+         * - 文本字幕：增量累积成 [SubtitleItem] 列表（复用既有渲染 / 延迟逻辑）。
          *
          * 说明：内嵌字幕是"边播边解码"，无法预知整段时间线，因此采用实时累积策略——
          * 对正常向前播放完全准确；向后拖动到尚未播过的区段时会暂时缺字幕，重播即补回。
          */
         override fun onCues(cueGroup: CueGroup) {
             if (_subtitleSource.value != SubtitleSource.EMBEDDED) return
+            // 图片字幕（PGS/SUP）由 ExoPlayer 自带 SubtitleView 直接渲染，不走文本延迟逻辑
+            if (_selectedEmbeddedTrack.value?.isPgs == true) return
+
             val text = cueGroup.cues.joinToString("\n") { it.text?.toString().orEmpty() }.trim()
             if (text == _lastCueText) return
 
@@ -170,9 +189,12 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
             .build()
     }
 
-    /** 自动选轨：优先中文，其次第一条。 */
-    private fun pickDefaultTrack(tracks: List<EmbeddedTrack>): EmbeddedTrack =
-        tracks.firstOrNull { isChineseTrack(it.language) } ?: tracks.first()
+    /** 自动选轨：优先中文文本轨（走延迟学习逻辑），其次任意文本轨，兜底第一条（可能即图片轨）。 */
+    private fun pickDefaultTrack(tracks: List<EmbeddedTrack>): EmbeddedTrack {
+        tracks.firstOrNull { isChineseTrack(it.language) && !it.isPgs }?.let { return it }
+        tracks.firstOrNull { !it.isPgs }?.let { return it }
+        return tracks.first()
+    }
 
     private fun isChineseTrack(lang: String?): Boolean {
         if (lang.isNullOrBlank()) return false
