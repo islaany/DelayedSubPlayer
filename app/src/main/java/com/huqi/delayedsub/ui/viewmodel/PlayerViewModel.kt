@@ -13,16 +13,15 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.text.TextOutput
 import com.huqi.delayedsub.DelayedSubApplication
 import com.huqi.delayedsub.data.database.VideoEntity
 import com.huqi.delayedsub.data.subtitle.SubtitleRepository
 import com.huqi.delayedsub.learning.DelayEngine
 import com.huqi.delayedsub.player.Media3Player
-import com.huqi.delayedsub.subtitle.BilingualCueSplitter
 import com.huqi.delayedsub.subtitle.EmbeddedTrack
 import com.huqi.delayedsub.subtitle.SubtitleSource
 import com.huqi.delayedsub.subtitle.model.SubtitleItem
+import com.huqi.delayedsub.subtitle.parser.BilingualCueSplitter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -35,15 +34,15 @@ import kotlinx.coroutines.launch
  *
  * 字幕来源有两种：
  * - 外部 .srt（[SubtitleSource.EXTERNAL]）：沿用既有解析链路，整段字幕一次性载入。
- * - 视频内嵌字幕轨（[SubtitleSource.EMBEDDED]）：通过 ExoPlayer 的 [TextOutput] 抓取
- *   cue 并实时累积成 [SubtitleItem]，复用相同的渲染 / 延迟逻辑。
+ * - 视频内嵌字幕轨（[SubtitleSource.EMBEDDED]）：通过 ExoPlayer 的
+ *   [Player.Listener.onCues] 抓取 cue 并实时累积成 [SubtitleItem]，复用相同的渲染 /
+ *   延迟逻辑。
  *
  * 关键点：ExoPlayer 内置字幕默认被禁用（见 [Media3Player]），内嵌字幕不交给播放器自带
  * 渲染，而是由本类捕获后走我们自己的覆盖层，这样才能做到"中文比英文晚出现"。
  */
 @OptIn(UnstableApi::class)
-class PlayerViewModel(app: Application, private val videoId: Long) :
-    AndroidViewModel(app), TextOutput {
+class PlayerViewModel(app: Application, private val videoId: Long) : AndroidViewModel(app) {
 
     private val container = (app as DelayedSubApplication).container
     private val player: ExoPlayer = Media3Player.create(app)
@@ -76,7 +75,7 @@ class PlayerViewModel(app: Application, private val videoId: Long) :
     val learningMode: StateFlow<Boolean> = container.settingsRepository.learningMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(500), true)
 
-    private val trackListener = object : Player.Listener {
+    private val playerListener = object : Player.Listener {
         override fun onTracksChanged(tracks: Tracks) {
             val textTracks = tracks.groups
                 .filter { it.type == C.TRACK_TYPE_TEXT && it.isSupported }
@@ -96,11 +95,47 @@ class PlayerViewModel(app: Application, private val videoId: Long) :
                 }
             }
         }
+
+        /**
+         * 内嵌字幕轨解码后逐条吐出当前可见 cue。
+         * 这里把 cue 增量累积成 [SubtitleItem] 列表（复用既有渲染 / 延迟逻辑）。
+         *
+         * 说明：内嵌字幕是"边播边解码"，无法预知整段时间线，因此采用实时累积策略——
+         * 对正常向前播放完全准确；向后拖动到尚未播过的区段时会暂时缺字幕，重播即补回。
+         */
+        override fun onCues(cueGroup: CueGroup) {
+            if (_subtitleSource.value != SubtitleSource.EMBEDDED) return
+            val text = cueGroup.cues.joinToString("\n") { it.text?.toString().orEmpty() }.trim()
+            if (text == _lastCueText) return
+
+            val pos = player.currentPosition
+            val list = _subtitles.value.toMutableList()
+            // 关闭上一条（结束时间 = 当前位置）
+            if (list.isNotEmpty() && list.last().endTime == Long.MAX_VALUE) {
+                val last = list.last()
+                list[list.lastIndex] = last.copy(endTime = pos)
+            }
+            _lastCueText = text
+            if (text.isNotEmpty()) {
+                val (en, zh) = BilingualCueSplitter.split(text)
+                if (en.isNotBlank() || zh.isNotBlank()) {
+                    // 双语同轨：英文与中文填进同一条，渲染层按延迟分别显示
+                    list.add(
+                        SubtitleItem(
+                            startTime = pos,
+                            endTime = Long.MAX_VALUE,
+                            englishText = en,
+                            chineseText = zh
+                        )
+                    )
+                }
+            }
+            _subtitles.value = list
+        }
     }
 
     init {
-        player.addListener(trackListener)
-        player.addTextOutput(this)
+        player.addListener(playerListener)
         viewModelScope.launch {
             val v = container.videoRepository.get(videoId)
             _video.value = v
@@ -115,43 +150,6 @@ class PlayerViewModel(app: Application, private val videoId: Long) :
                 }
             }
         }
-    }
-
-    /**
-     * [TextOutput] 回调：内嵌字幕轨解码后逐条吐出当前可见 cue。
-     * 这里把 cue 增量累积成 [SubtitleItem] 列表（复用既有渲染 / 延迟逻辑）。
-     *
-     * 说明：内嵌字幕是"边播边解码"，无法预知整段时间线，因此采用实时累积策略——
-     * 对正常向前播放完全准确；向后拖动到尚未播过的区段时会暂时缺字幕，重播即补回。
-     */
-    override fun onCues(cueGroup: CueGroup) {
-        if (_subtitleSource.value != SubtitleSource.EMBEDDED) return
-        val text = cueGroup.cues.joinToString("\n") { it.text?.toString().orEmpty() }.trim()
-        if (text == _lastCueText) return
-
-        val pos = player.currentPosition
-        val list = _subtitles.value.toMutableList()
-        // 关闭上一条（结束时间 = 当前位置）
-        if (list.isNotEmpty() && list.last().endTime == Long.MAX_VALUE) {
-            val last = list.last()
-            list[list.lastIndex] = last.copy(endTime = pos)
-        }
-        _lastCueText = text
-        if (text.isNotEmpty()) {
-            val (en, zh) = BilingualCueSplitter.split(text)
-            if (en.isNotBlank() || zh.isNotBlank()) {
-                // 双语同轨：英文与中文填进同一条，渲染层按延迟分别显示
-                list.add(
-                    SubtitleItem(
-                        startTime = pos,
-                        endTime = Long.MAX_VALUE,
-                        englishText = en,
-                        chineseText = zh
-                    )
-                )
-            }
-        }
-        _subtitles.value = list
     }
 
     /** 选用某条内嵌字幕轨作为字幕来源。 */
@@ -210,8 +208,7 @@ class PlayerViewModel(app: Application, private val videoId: Long) :
 
     override fun onCleared() {
         val pos = player.currentPosition
-        player.removeTextOutput(this)
-        player.removeListener(trackListener)
+        player.removeListener(playerListener)
         viewModelScope.launch {
             _video.value?.let { container.videoRepository.touch(it.id, pos) }
         }
