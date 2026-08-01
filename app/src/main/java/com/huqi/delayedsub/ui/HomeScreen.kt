@@ -87,8 +87,8 @@ fun HomeScreen(navController: NavController) {
                 pendingVideoUri = null
                 showSubtitlePrompt = false
             },
-            title = { Text("选择字幕文件？") },
-            text = { Text("若已准备好 .srt 字幕，可选择文件；也可稍后跳过，仅观看视频。") },
+            title = { Text("选择外部字幕（可选）") },
+            text = { Text("视频内嵌的字幕会在播放页自动识别并使用。若另有 .srt 字幕文件，可在此选择；没有的话直接跳过即可。") },
             confirmButton = {
                 TextButton(onClick = {
                     showSubtitlePrompt = false

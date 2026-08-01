@@ -38,11 +38,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.view.View
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.SubtitleView
 import androidx.navigation.NavController
+import com.huqi.delayedsub.subtitle.EmbeddedTrack
+import com.huqi.delayedsub.subtitle.SubtitleSource
 import com.huqi.delayedsub.DelayedSubApplication
 import com.huqi.delayedsub.learning.DelayEngine
 import com.huqi.delayedsub.subtitle.renderer.SubtitleDisplay
@@ -60,6 +64,10 @@ fun PlayerScreen(videoId: Long, navController: NavController) {
     val subtitles by vm.subtitles.collectAsState(initial = emptyList())
     val maxDelay by vm.maxDelayMs.collectAsState(initial = DelayEngine.MAX_DELAY_DEFAULT_MS)
     val learning by vm.learningMode.collectAsState(initial = true)
+    val subtitleSource by vm.subtitleSource.collectAsState(initial = SubtitleSource.NONE)
+    val embeddedTracks by vm.embeddedTracks.collectAsState(initial = emptyList())
+    val selectedTrack by vm.selectedEmbeddedTrack.collectAsState(initial = null)
+    val hasExternal = video?.subtitleUri != null
 
     var position by remember { mutableLongStateOf(0L) }
     var playing by remember { mutableStateOf(true) }
@@ -97,6 +105,8 @@ fun PlayerScreen(videoId: Long, navController: NavController) {
                     PlayerView(ctx).apply {
                         useController = false
                         setPlayer(player)
+                        // 内嵌字幕由我们自己的覆盖层渲染，隐藏播放器自带 SubtitleView 避免双重显示
+                        findViewById<SubtitleView>(androidx.media3.ui.R.id.exo_subtitles)?.visibility = View.GONE
                     }
                 },
                 onRelease = { it.player = null },
@@ -186,6 +196,49 @@ private fun PlayerControls(
             }
         }
         if (showSettings) {
+            Text("字幕来源", color = Color.White, fontSize = 14.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FilterChip(
+                    selected = subtitleSource == SubtitleSource.NONE,
+                    onClick = vm::selectNoSubtitle,
+                    label = { Text("无") },
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+                if (embeddedTracks.isNotEmpty()) {
+                    FilterChip(
+                        selected = subtitleSource == SubtitleSource.EMBEDDED,
+                        onClick = { vm.selectEmbeddedTrack(embeddedTracks.first()) },
+                        label = { Text("内嵌字幕") },
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
+                if (hasExternal) {
+                    FilterChip(
+                        selected = subtitleSource == SubtitleSource.EXTERNAL,
+                        onClick = vm::selectExternalSource,
+                        label = { Text("外部字幕") },
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
+            }
+            if (subtitleSource == SubtitleSource.EMBEDDED && embeddedTracks.size > 1) {
+                Text(
+                    "选择字幕轨",
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    embeddedTracks.forEach { t: EmbeddedTrack ->
+                        FilterChip(
+                            selected = selectedTrack == t,
+                            onClick = { vm.selectEmbeddedTrack(t) },
+                            label = { Text(t.displayName) },
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                    }
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("学习模式", color = Color.White, fontSize = 14.sp)
                 Switch(checked = learning, onCheckedChange = onSetLearning)
