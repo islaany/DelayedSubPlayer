@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -90,8 +91,9 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
                 _autoResolved = true
                 val hasExternal = !(_video.value?.subtitleUri.isNullOrBlank())
                 // 没有外部字幕且视频自带字幕轨时，自动启用第一条内嵌字幕
+                // 优先选中文轨（贴合"听英文、看中文"的学习目的），否则用第一条
                 if (!hasExternal && textTracks.isNotEmpty()) {
-                    selectEmbeddedTrack(textTracks.first())
+                    selectEmbeddedTrack(pickDefaultTrack(textTracks))
                 }
             }
         }
@@ -158,11 +160,24 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
         _subtitleSource.value = SubtitleSource.EMBEDDED
         _lastCueText = ""
         _subtitles.value = emptyList()
+        // 用 TrackSelectionOverride 直接强制选中这条轨，避免语言标签为 und/null 时
+        // setPreferredTextLanguage 匹配不到任何轨、导致字幕整段不解码（之前白屏的根因）
+        val override = TrackSelectionOverride(track.trackGroup, track.index)
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
-            .setPreferredTextLanguage(track.language)
+            .addOverride(override)
             .build()
+    }
+
+    /** 自动选轨：优先中文，其次第一条。 */
+    private fun pickDefaultTrack(tracks: List<EmbeddedTrack>): EmbeddedTrack =
+        tracks.firstOrNull { isChineseTrack(it.language) } ?: tracks.first()
+
+    private fun isChineseTrack(lang: String?): Boolean {
+        if (lang.isNullOrBlank()) return false
+        val l = lang.lowercase()
+        return l.startsWith("zh") || l.startsWith("chi") || l.contains("chinese")
     }
 
     /** 切回外部 .srt 字幕（若存在）。 */
