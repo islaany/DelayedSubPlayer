@@ -151,18 +151,22 @@ private fun SubtitleOverlay(display: SubtitleDisplay) {
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(horizontal = 24.dp)
         ) {
-            if (display.english != null) {
+            // 注意：display 来自另一个模块（shared），其属性无法跨模块智能转换，
+            // 必须先赋给本地 val 再做非空判断
+            val english = display.english
+            val chinese = display.chinese
+            if (english != null) {
                 Text(
-                    text = display.english,
+                    text = english,
                     color = Color.White,
                     fontSize = 20.sp,
                     lineHeight = 26.sp,
                     textAlign = TextAlign.Center
                 )
             }
-            if (display.chinese != null) {
+            if (chinese != null) {
                 Text(
-                    text = display.chinese,
+                    text = chinese,
                     color = Color(0xFFFFE082),
                     fontSize = 18.sp,
                     lineHeight = 24.sp,

@@ -24,37 +24,29 @@ import com.huqi.delayedsub.subtitle.SubtitleSource
 import com.huqi.delayedsub.subtitle.SubtitleStream
 import com.huqi.delayedsub.subtitle.model.SubtitleItem
 import com.huqi.delayedsub.subtitle.parser.BilingualCueSplitter
-import com.huqi.delayedsub.subtitle.parser.SrtSubtitleParser
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * 播放页 ViewModel。
  *
  * 字幕策略（v3，纯 ExoPlayer 抓取，零外部依赖）：
- * 不依赖 ffmpeg——ffmpeg-kit 的 Maven 仓库（maven.arthenica.com）已无法解析，
- * 且 ExoPlayer 的 onCues 对「本地 / 网络链接」视频都会触发，足够稳定。
+ * 不依赖 ffmpeg——ffmpeg-kit 的 Maven 仓库（maven.arthenica.com）在 GitHub Actions
+ * 与本地均 DNS 不可达，且 com/arthenica 在 Maven Central 仅有 smart-exception-*，
+ * ffmpeg-kit 实际不在中央仓库，CI 无法解析。故改用 ExoPlayer 原生能力：
  *
- * 做法：
  *   1. 监听 onTracksChanged 枚举视频的字幕轨（文本轨 + 图片轨），列出供手动选；
- *   2. 自动或手动选中一条文本轨后，ExoPlayer 通过 onCues(CueGroup) 实时吐出
- *      Cue（含绝对 start/end 时间 + 文本），我们按时间线累积成 SubtitleItem，
- *      用既有双语拆分 + 延迟覆盖层渲染（英文即时、中文延迟）；
- *   3. 图片字幕轨（PGS/SUP）无法以文本显示，交给播放器自带 SubtitleView 渲染。
+ *   2. 选中文本轨后，ExoPlayer 经 onCues(CueGroup) 实时吐出当前活跃字幕；
+ *      CueGroup.presentationTimeUs 是该组字幕在媒体时间轴上的绝对起点，
+ *      我们用它把每条字幕锚定成绝对时间线（下一组到来时收尾上一组），
+ *      再由既有双语拆分 + 延迟覆盖层渲染（英文即时、中文延迟）；
+ *   3. 图片字幕轨（PGS/DVBSUB）无法以文本显示，交给播放器自带 SubtitleView 渲染。
  *
- * 因此无论本地文件还是网络链接，字幕都能稳定显示，且中文延迟逻辑一致。
- *
- * 字幕来源类型（[SubtitleSource]）：
- * - EXTERNAL：用户单独提供的 .srt；
- * - EMBEDDED：从视频内嵌轨由 ExoPlayer 抓取得到（首选，自动选中文文本轨）；
- * - NONE：关闭。
+ * 本地文件与网络链接表现一致，彻底解决「用链接打开读不出字幕」的问题。
  */
 @OptIn(UnstableApi::class)
 class PlayerViewModel(app: Application, private val videoId: Long) : AndroidViewModel(app) {
@@ -81,6 +73,9 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
 
     // 与 _subtitleStreams 的 index 一一对应的 Tracks.Group（仅文本/图片轨）
     private var textGroups: List<Tracks.Group> = emptyList()
+
+    // 上一组字幕锚定的起点（毫秒），用于「下一组到来时收尾上一组」
+    private var prevStartMs: Long? = null
 
     val maxDelayMs: StateFlow<Long> = container.settingsRepository.maxDelayMs
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(500), DelayEngine.MAX_DELAY_DEFAULT_MS)
@@ -140,6 +135,7 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
         _selectedStream.value = stream
         _subtitleSource.value = SubtitleSource.EMBEDDED
         _subtitles.value = emptyList()
+        prevStartMs = null
         val g = textGroups.getOrNull(stream.index) ?: return
         val params = player.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
@@ -149,24 +145,44 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
         player.trackSelectionParameters = params
     }
 
-    /** 把 onCues 收到的 Cue 累积成绝对时间线（英文即时、中文延迟由覆盖层处理）。 */
+    /**
+     * 把 onCues 收到的 CueGroup 锚定成绝对时间线：
+     * - 用 presentationTimeUs 作为本组起点；
+     * - 本组每条字幕先给一个临时 end（起点+默认时长），待下一组到来时用其起点收尾上一组，
+     *   从而得到准确的、不重叠的显示区间；
+     * - 英文即时、中文延迟由覆盖层（SubtitleRenderer）统一处理。
+     */
     private fun ingestCues(cueGroup: CueGroup) {
         val selected = _selectedStream.value ?: return
         if (selected.isBitmap) return // 图片字幕交给 SubtitleView，不进文本覆盖层
+        val newStartMs = if (cueGroup.presentationTimeUs != C.TIME_UNSET)
+            cueGroup.presentationTimeUs / 1000 else player.currentPosition
+        if (newStartMs <= 0) return
+
+        val current = _subtitles.value.toMutableList()
+        // 用下一组起点收尾上一组（避免显示区间过长/重叠）
+        if (prevStartMs != null) {
+            for (i in current.indices) {
+                if (current[i].startTime == prevStartMs) {
+                    current[i] = current[i].copy(endTime = newStartMs)
+                }
+            }
+        }
+
         val incoming = mutableListOf<SubtitleItem>()
         for (cue in cueGroup.cues) {
             val text = cue.text?.toString() ?: continue
             if (text.isBlank()) continue
             val (en, zh) = BilingualCueSplitter.split(text)
-            val startMs = if (cue.startTimeUs != C.TIME_UNSET) cue.startTimeUs / 1000 else player.currentPosition
-            val endMs = if (cue.endTimeUs != C.TIME_UNSET) cue.endTimeUs / 1000 else startMs + 2000
-            incoming += SubtitleItem(startMs, endMs, en, zh)
+            incoming += SubtitleItem(newStartMs, newStartMs + DEFAULT_CUE_MS, en, zh)
         }
         if (incoming.isEmpty()) return
-        val merged = (_subtitles.value + incoming)
+
+        current.addAll(incoming)
+        _subtitles.value = current
             .distinctBy { "${it.startTime}|${it.englishText}|${it.chineseText}" }
             .sortedBy { it.startTime }
-        _subtitles.value = merged
+        prevStartMs = newStartMs
     }
 
     /** 自动挑选（优先中文文本轨，其次任意文本轨，图片轨兜底）。 */
@@ -192,6 +208,7 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
         _subtitleSource.value = SubtitleSource.EXTERNAL
         _selectedStream.value = null
         _subtitles.value = emptyList()
+        prevStartMs = null
         val uri = _video.value?.subtitleUri
         if (!uri.isNullOrBlank()) loadExternalSrt(Uri.parse(uri))
     }
@@ -202,6 +219,7 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
                 .onSuccess {
                     _subtitleSource.value = SubtitleSource.EXTERNAL
                     _subtitles.value = it
+                    prevStartMs = null
                 }
         }
     }
@@ -211,6 +229,7 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
         _subtitleSource.value = SubtitleSource.NONE
         _selectedStream.value = null
         _subtitles.value = emptyList()
+        prevStartMs = null
     }
 
     fun setLearningMode(on: Boolean) =
@@ -241,3 +260,6 @@ private val IMAGE_MIME = setOf(
     MimeTypes.APPLICATION_PGS,
     MimeTypes.APPLICATION_DVBSUBS
 )
+
+// 末组字幕没有「下一组」可收尾时的临时显示时长
+private const val DEFAULT_CUE_MS = 4000L
