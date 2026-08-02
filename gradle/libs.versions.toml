@@ -13,7 +13,7 @@ coroutines = "1.9.0"
 navigationCompose = "2.8.4"
 junit = "4.13.2"
 truth = "1.4.4"
-ffmpegKit = "6.0.LTS"
+ffmpegKit = "6.0-2.LTS"
 
 [libraries]
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
