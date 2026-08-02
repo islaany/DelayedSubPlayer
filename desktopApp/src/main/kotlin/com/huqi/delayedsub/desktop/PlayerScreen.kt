@@ -29,7 +29,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.FileChooser
 import com.huqi.delayedsub.learning.DelayEngine
 import com.huqi.delayedsub.subtitle.renderer.SubtitleDisplay
 import com.huqi.delayedsub.subtitle.renderer.SubtitleRenderer
@@ -110,8 +109,15 @@ fun PlayerScreen(model: AppModel) {
                 )
                 Button(onClick = { if (url.isNotBlank()) model.loadVideo(url) }) { Text("打开链接") }
                 Button(onClick = {
-                    val f = FileChooser().showOpenDialog()
-                    if (f != null) model.loadVideo(f.absolutePath)
+                    // Compose 1.7+ 移除了 androidx.compose.ui.window.FileChooser，
+                    // 改用 Swing 的 java.awt.FileDialog（AWT 在桌面 JVM 上可用）。
+                    val fd = java.awt.FileDialog(null, "选择视频文件", java.awt.FileDialog.LOAD)
+                    fd.isVisible = true
+                    val picked = fd.file
+                    if (picked != null) {
+                        val path = java.io.File(fd.directory, picked).absolutePath
+                        model.loadVideo(path)
+                    }
                 }) { Text("打开文件") }
             }
 

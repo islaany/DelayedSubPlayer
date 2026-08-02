@@ -2,6 +2,7 @@ package com.huqi.delayedsub.desktop
 
 import com.huqi.delayedsub.subtitle.SubtitleStream
 import java.io.File
+import kotlin.text.RegexOption
 
 /**
  * 用内嵌/系统 ffmpeg 从视频（本地或网络链接）探测并抽取字幕轨。
