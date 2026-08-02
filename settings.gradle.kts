@@ -11,8 +11,6 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // ffmpeg-kit 不在 Maven Central，发布在 Arthenica 自有仓库（用于字幕轨抽取）
-        maven { url = uri("https://maven.arthenica.com/repository/release") }
     }
 }
 

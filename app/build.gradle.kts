@@ -47,9 +47,6 @@ dependencies {
     // 共享字幕逻辑（解析 / 拆分 / 延迟 / 渲染，跨 Android + Windows 复用）
     implementation(project(":shared"))
 
-    // 字幕抽取：从视频（本地或网络链接）内嵌轨抽为 SRT 文本
-    implementation(libs.ffmpeg.kit.min.gpl)
-
     // Core
     implementation(libs.core.ktx)
     implementation(libs.lifecycle.runtime.ktx)

@@ -108,11 +108,9 @@ fun PlayerScreen(videoId: Long, navController: NavController) {
                     }
                 },
                 update = { pv ->
-                    // 仅本地文件的图片字幕（PGS/SUP）才交给播放器自带 SubtitleView；
-                    // 流式抽取场景下图片字幕无法转为文本，此处统一隐藏，由提示引导选文本轨
-                    val showBuiltIn = subtitleSource == SubtitleSource.EMBEDDED
-                        && selectedStream?.isBitmap == true
-                        && !video?.videoUri.orEmpty().startsWith("http", true)
+                    // 图片字幕（PGS/SUP）无法以文本显示，交给播放器自带 SubtitleView 渲染；
+                    // 文本轨则由我们的延迟覆盖层渲染，隐藏内置 SubtitleView 避免重复显示
+                    val showBuiltIn = selectedStream?.isBitmap == true
                     pv.subtitleView?.visibility = if (showBuiltIn) View.VISIBLE else View.GONE
                 },
                 onRelease = { it.player = null },
