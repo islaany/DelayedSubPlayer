@@ -111,7 +111,7 @@ fun PlayerScreen(model: AppModel) {
                 Button(onClick = {
                     // Compose 1.7+ 移除了 androidx.compose.ui.window.FileChooser，
                     // 改用 Swing 的 java.awt.FileDialog（AWT 在桌面 JVM 上可用）。
-                    val fd = java.awt.FileDialog(null, "选择视频文件", java.awt.FileDialog.LOAD)
+                    val fd = java.awt.FileDialog(null as java.awt.Frame?, "选择视频文件", java.awt.FileDialog.LOAD)
                     fd.isVisible = true
                     val picked = fd.file
                     if (picked != null) {

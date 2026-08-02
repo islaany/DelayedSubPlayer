@@ -66,7 +66,7 @@ object FfmpegExtractor {
         //        Stream #0:4: Subtitle: hdmv_pgs_subtitle
         val re = Regex(
             """Stream\s+#\d+:(\d+)(?:\(([^)]*)\))?:.*?Subtitle:\s*([\w]+)""",
-            RegexOption.IGNORECASE
+            RegexOption.IGNORE_CASE
         )
         for (m in re.findAll(log)) {
             val idx = m.groupValues[1].toIntOrNull() ?: continue
