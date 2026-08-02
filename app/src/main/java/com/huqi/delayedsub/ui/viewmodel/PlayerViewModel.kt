@@ -75,8 +75,8 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
     @Volatile
     private var _lastCueText: String = ""
 
-    /** 内嵌字幕轨是否已完成一次自动解析（避免重复自动启用）。 */
-    private var _autoResolved = false
+    /** 用户是否已在设置面板手动选择过字幕来源（一旦手动选过就不再自动选轨，避免覆盖用户意图）。 */
+    private var _userChoseSource = false
 
     val maxDelayMs: StateFlow<Long> = container.settingsRepository.maxDelayMs
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(500), DelayEngine.MAX_DELAY_DEFAULT_MS)
@@ -103,12 +103,15 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
                     }
                 }
             _embeddedTracks.value = textTracks
-            if (!_autoResolved) {
-                _autoResolved = true
+            // 自动选轨：仅在用户尚未手动选择、且当前还没选中任何内嵌轨时进行。
+            // 注意：onTracksChanged 可能在 prepare 完成前先以"空轨列表"触发一次，
+            // 因此不能用「一次性标志」——否则真实字幕轨到达时就不会再自动选中，
+            // 导致字幕轨检测到了却整段不显示（白屏）。
+            if (!_userChoseSource && _selectedEmbeddedTrack.value == null) {
                 val hasExternal = !(_video.value?.subtitleUri.isNullOrBlank())
                 // 没有外部字幕且视频自带字幕轨时，自动启用一条内嵌字幕
                 if (!hasExternal && textTracks.isNotEmpty()) {
-                    selectEmbeddedTrack(pickDefaultTrack(textTracks))
+                    applyEmbeddedTrack(pickDefaultTrack(textTracks))
                 }
             }
         }
@@ -126,32 +129,36 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
             // 图片字幕（PGS/SUP）由 ExoPlayer 自带 SubtitleView 直接渲染，不走文本延迟逻辑
             if (_selectedEmbeddedTrack.value?.isPgs == true) return
 
-            val text = cueGroup.cues.joinToString("\n") { it.text?.toString().orEmpty() }.trim()
-            if (text == _lastCueText) return
+            try {
+                val text = cueGroup.cues.joinToString("\n") { it.text?.toString().orEmpty() }.trim()
+                if (text == _lastCueText) return
 
-            val pos = player.currentPosition
-            val list = _subtitles.value.toMutableList()
-            // 关闭上一条（结束时间 = 当前位置）
-            if (list.isNotEmpty() && list.last().endTime == Long.MAX_VALUE) {
-                val last = list.last()
-                list[list.lastIndex] = last.copy(endTime = pos)
-            }
-            _lastCueText = text
-            if (text.isNotEmpty()) {
-                val (en, zh) = BilingualCueSplitter.split(text)
-                if (en.isNotBlank() || zh.isNotBlank()) {
-                    // 双语同轨：英文与中文填进同一条，渲染层按延迟分别显示
-                    list.add(
-                        SubtitleItem(
-                            startTime = pos,
-                            endTime = Long.MAX_VALUE,
-                            englishText = en,
-                            chineseText = zh
-                        )
-                    )
+                val pos = player.currentPosition
+                val list = _subtitles.value.toMutableList()
+                // 关闭上一条（结束时间 = 当前位置）
+                if (list.isNotEmpty() && list.last().endTime == Long.MAX_VALUE) {
+                    val last = list.last()
+                    list[list.lastIndex] = last.copy(endTime = pos)
                 }
+                _lastCueText = text
+                if (text.isNotEmpty()) {
+                    val (en, zh) = BilingualCueSplitter.split(text)
+                    if (en.isNotBlank() || zh.isNotBlank()) {
+                        // 双语同轨：英文与中文填进同一条，渲染层按延迟分别显示
+                        list.add(
+                            SubtitleItem(
+                                startTime = pos,
+                                endTime = Long.MAX_VALUE,
+                                englishText = en,
+                                chineseText = zh
+                            )
+                        )
+                    }
+                }
+                _subtitles.value = list
+            } catch (_: Exception) {
+                // 单条 cue 解析异常不应中断整个字幕流
             }
-            _subtitles.value = list
         }
     }
 
@@ -173,8 +180,8 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
         }
     }
 
-    /** 选用某条内嵌字幕轨作为字幕来源。 */
-    fun selectEmbeddedTrack(track: EmbeddedTrack) {
+    /** 真正落实选轨（更新状态 + 强制 TrackSelectionOverride）。不标记用户已手动选择。 */
+    private fun applyEmbeddedTrack(track: EmbeddedTrack) {
         _selectedEmbeddedTrack.value = track
         _subtitleSource.value = SubtitleSource.EMBEDDED
         _lastCueText = ""
@@ -187,6 +194,21 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
             .addOverride(override)
             .build()
+    }
+
+    /** 用户（或设置面板）选用某条内嵌字幕轨作为字幕来源。 */
+    fun selectEmbeddedTrack(track: EmbeddedTrack) {
+        _userChoseSource = true
+        applyEmbeddedTrack(track)
+    }
+
+    /** 选用自动挑选的（优先中文）内嵌字幕轨，标记为用户已选择。 */
+    fun selectDefaultEmbeddedTrack() {
+        val tracks = _embeddedTracks.value
+        if (tracks.isNotEmpty()) {
+            _userChoseSource = true
+            applyEmbeddedTrack(pickDefaultTrack(tracks))
+        }
     }
 
     /** 自动选轨：优先中文文本轨（走延迟学习逻辑），其次任意文本轨，兜底第一条（可能即图片轨）。 */
@@ -204,6 +226,7 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
 
     /** 切回外部 .srt 字幕（若存在）。 */
     fun selectExternalSource() {
+        _userChoseSource = true
         _subtitleSource.value = SubtitleSource.EXTERNAL
         _selectedEmbeddedTrack.value = null
         _lastCueText = ""
@@ -224,6 +247,7 @@ class PlayerViewModel(app: Application, private val videoId: Long) : AndroidView
 
     /** 完全关闭字幕。 */
     fun selectNoSubtitle() {
+        _userChoseSource = true
         _subtitleSource.value = SubtitleSource.NONE
         _selectedEmbeddedTrack.value = null
         _lastCueText = ""

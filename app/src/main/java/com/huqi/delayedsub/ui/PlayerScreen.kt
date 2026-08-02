@@ -136,6 +136,7 @@ fun PlayerScreen(videoId: Long, navController: NavController) {
             hasExternal = hasExternal,
             onSelectNoSubtitle = vm::selectNoSubtitle,
             onSelectEmbedded = vm::selectEmbeddedTrack,
+            onSelectEmbeddedDefault = vm::selectDefaultEmbeddedTrack,
             onSelectExternal = vm::selectExternalSource
         )
     }
@@ -191,6 +192,7 @@ private fun PlayerControls(
     hasExternal: Boolean,
     onSelectNoSubtitle: () -> Unit,
     onSelectEmbedded: (EmbeddedTrack) -> Unit,
+    onSelectEmbeddedDefault: () -> Unit,
     onSelectExternal: () -> Unit
 ) {
     val duration = player.duration.coerceAtLeast(0L)
@@ -226,7 +228,7 @@ private fun PlayerControls(
                 if (embeddedTracks.isNotEmpty()) {
                     FilterChip(
                         selected = subtitleSource == SubtitleSource.EMBEDDED,
-                        onClick = { onSelectEmbedded(embeddedTracks.first()) },
+                        onClick = onSelectEmbeddedDefault,
                         label = { Text("内嵌字幕") },
                         modifier = Modifier.padding(end = 8.dp)
                     )
@@ -240,7 +242,7 @@ private fun PlayerControls(
                     )
                 }
             }
-            if (subtitleSource == SubtitleSource.EMBEDDED && embeddedTracks.size > 1) {
+            if (subtitleSource == SubtitleSource.EMBEDDED && embeddedTracks.isNotEmpty()) {
                 Text(
                     "选择字幕轨",
                     color = Color.Gray,
