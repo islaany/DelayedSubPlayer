@@ -1,5 +1,8 @@
 plugins {
     alias(libs.plugins.kotlinJvm)
+    // Compose 编译器插件必须显式 apply（Kotlin 2.0+ 要求），否则报错
+    // "you must apply org.jetbrains.kotlin.plugin.compose plugin"
+    alias(libs.plugins.kotlinCompose)
     alias(libs.plugins.compose)
 }
 
