@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "DelayedSubPlayer"
 include(":app")
+include(":shared")

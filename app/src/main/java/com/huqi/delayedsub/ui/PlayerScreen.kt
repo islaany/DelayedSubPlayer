@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -43,12 +42,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
-import androidx.media3.ui.SubtitleView
 import androidx.navigation.NavController
-import com.huqi.delayedsub.subtitle.EmbeddedTrack
-import com.huqi.delayedsub.subtitle.SubtitleSource
 import com.huqi.delayedsub.DelayedSubApplication
 import com.huqi.delayedsub.learning.DelayEngine
+import com.huqi.delayedsub.subtitle.SubtitleSource
+import com.huqi.delayedsub.subtitle.SubtitleStream
 import com.huqi.delayedsub.subtitle.renderer.SubtitleDisplay
 import com.huqi.delayedsub.subtitle.renderer.SubtitleRenderer
 import com.huqi.delayedsub.ui.viewmodel.PlayerViewModel
@@ -65,8 +63,8 @@ fun PlayerScreen(videoId: Long, navController: NavController) {
     val maxDelay by vm.maxDelayMs.collectAsState(initial = DelayEngine.MAX_DELAY_DEFAULT_MS)
     val learning by vm.learningMode.collectAsState(initial = true)
     val subtitleSource by vm.subtitleSource.collectAsState(initial = SubtitleSource.NONE)
-    val embeddedTracks by vm.embeddedTracks.collectAsState(initial = emptyList())
-    val selectedTrack by vm.selectedEmbeddedTrack.collectAsState(initial = null)
+    val subtitleStreams by vm.subtitleStreams.collectAsState(initial = emptyList())
+    val selectedStream by vm.selectedStream.collectAsState(initial = null)
     val hasExternal = video?.subtitleUri != null
 
     var position by remember { mutableLongStateOf(0L) }
@@ -105,13 +103,16 @@ fun PlayerScreen(videoId: Long, navController: NavController) {
                     PlayerView(ctx).apply {
                         useController = false
                         setPlayer(player)
-                        // 默认隐藏自带字幕视图：文本轨由我们的覆盖层渲染（中文延迟）
+                        // 字幕由我们抽取后渲染，播放器内置字幕视图保持隐藏
                         subtitleView?.visibility = View.GONE
                     }
                 },
                 update = { pv ->
-                    // 图片字幕（PGS/SUP）由 ExoPlayer 自带 SubtitleView 直接渲染，其余情况用我们的覆盖层
-                    val showBuiltIn = subtitleSource == SubtitleSource.EMBEDDED && selectedTrack?.isPgs == true
+                    // 仅本地文件的图片字幕（PGS/SUP）才交给播放器自带 SubtitleView；
+                    // 流式抽取场景下图片字幕无法转为文本，此处统一隐藏，由提示引导选文本轨
+                    val showBuiltIn = subtitleSource == SubtitleSource.EMBEDDED
+                        && selectedStream?.isBitmap == true
+                        && !video?.videoUri.orEmpty().startsWith("http", true)
                     pv.subtitleView?.visibility = if (showBuiltIn) View.VISIBLE else View.GONE
                 },
                 onRelease = { it.player = null },
@@ -131,12 +132,12 @@ fun PlayerScreen(videoId: Long, navController: NavController) {
             onSetLearning = vm::setLearningMode,
             onSetMaxDelay = vm::setMaxDelay,
             subtitleSource = subtitleSource,
-            embeddedTracks = embeddedTracks,
-            selectedTrack = selectedTrack,
+            subtitleStreams = subtitleStreams,
+            selectedStream = selectedStream,
             hasExternal = hasExternal,
             onSelectNoSubtitle = vm::selectNoSubtitle,
-            onSelectEmbedded = vm::selectEmbeddedTrack,
-            onSelectEmbeddedDefault = vm::selectDefaultEmbeddedTrack,
+            onSelectEmbedded = vm::selectSubtitleStream,
+            onSelectEmbeddedDefault = vm::selectDefaultEmbeddedStream,
             onSelectExternal = vm::selectExternalSource
         )
     }
@@ -187,11 +188,11 @@ private fun PlayerControls(
     onSetLearning: (Boolean) -> Unit,
     onSetMaxDelay: (Long) -> Unit,
     subtitleSource: SubtitleSource,
-    embeddedTracks: List<EmbeddedTrack>,
-    selectedTrack: EmbeddedTrack?,
+    subtitleStreams: List<SubtitleStream>,
+    selectedStream: SubtitleStream?,
     hasExternal: Boolean,
     onSelectNoSubtitle: () -> Unit,
-    onSelectEmbedded: (EmbeddedTrack) -> Unit,
+    onSelectEmbedded: (SubtitleStream) -> Unit,
     onSelectEmbeddedDefault: () -> Unit,
     onSelectExternal: () -> Unit
 ) {
@@ -225,7 +226,7 @@ private fun PlayerControls(
                     label = { Text("无") },
                     modifier = Modifier.padding(end = 8.dp)
                 )
-                if (embeddedTracks.isNotEmpty()) {
+                if (subtitleStreams.isNotEmpty()) {
                     FilterChip(
                         selected = subtitleSource == SubtitleSource.EMBEDDED,
                         onClick = onSelectEmbeddedDefault,
@@ -242,22 +243,30 @@ private fun PlayerControls(
                     )
                 }
             }
-            if (subtitleSource == SubtitleSource.EMBEDDED && embeddedTracks.isNotEmpty()) {
+            if (subtitleStreams.isNotEmpty()) {
                 Text(
-                    "选择字幕轨",
+                    "选择字幕轨（共 ${subtitleStreams.size} 条）",
                     color = Color.Gray,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(top = 4.dp)
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    embeddedTracks.forEach { t: EmbeddedTrack ->
+                    subtitleStreams.forEach { t: SubtitleStream ->
                         FilterChip(
-                            selected = selectedTrack == t,
+                            selected = selectedStream == t,
                             onClick = { onSelectEmbedded(t) },
                             label = { Text(t.displayName) },
                             modifier = Modifier.padding(end = 8.dp)
                         )
                     }
+                }
+                if (selectedStream?.isBitmap == true) {
+                    Text(
+                        "图片字幕（PGS/SUP）无法以文本显示，建议选文本轨",
+                        color = Color.Gray,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {

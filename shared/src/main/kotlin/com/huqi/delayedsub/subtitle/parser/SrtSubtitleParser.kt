@@ -3,12 +3,10 @@ package com.huqi.delayedsub.subtitle.parser
 import com.huqi.delayedsub.subtitle.model.SubtitleItem
 
 /**
- * SRT 字幕解析器（自包含实现）。
+ * SRT 字幕解析器（自包含实现，与平台无关）。
  *
- * 不依赖 AndroidX Media3 内部的 [androidx.media3.extractor.text.subrip.SubripParser]，
- * 因为其 `parse(...)` 签名在 1.4.x 之后有破坏性变更，且 `OutputOptions` /
- * `DecodeTricks` 属于非公开 API（在 1.4.1 中已不可访问）。这里直接按 SRT 规范解析，
- * 行为稳定、与 Media3 版本无关。解析后用 [BilingualCueSplitter] 拆出英文 / 中文。
+ * 不依赖 AndroidX Media3 内部的 SubripParser，避免其内部 API 破坏性变更。
+ * 直接按 SRT 规范解析，行为稳定。解析后用 [BilingualCueSplitter] 拆出英文 / 中文。
  *
  * 兼容点：
  * - UTF-8（自动剥离 BOM）
